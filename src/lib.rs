@@ -152,9 +152,9 @@ impl Amm for JupiterRarefish {
         let (
             source_vault,
             source_fees_vault,
-            source_token_program,
+            mut source_token_program,
             destination_vault,
-            destination_token_program,
+            mut destination_token_program,
         ) = if *source_mint == self.pool.token_a_mint {
             (
                 self.pool.token_a_vault,
@@ -172,6 +172,13 @@ impl Amm for JupiterRarefish {
                 self.pool.token_a_program,
             )
         };
+        // If these fields are not set in SwapPool account then they are the original token program.
+        if source_token_program == Pubkey::default() {
+            source_token_program = anchor_spl::token::spl_token::id();
+        }
+        if destination_token_program == Pubkey::default() {
+            destination_token_program = anchor_spl::token::spl_token::id();
+        }
 
         let account_metas = vec![
             AccountMeta::new(*token_transfer_authority, true),
@@ -218,7 +225,7 @@ mod tests {
     use crate::JupiterRarefish;
 
     #[test]
-    fn test_jupiter_rarefish_integration_quote() {
+    fn test_jupiter_rarefish_integration_quote_sol_usdc() {
         const SOL_USDC_MARKET: Pubkey = pubkey!("H6jDD8QN6McX2QXMeVw6zBs3HKEgVvtnhsH139heFAnF");
         let token_a_decimals = 9.0;
         let token_b_decimals = 6.0;
@@ -272,6 +279,83 @@ mod tests {
 
         println!(
             "Getting quote for buying SOL with {} USDC",
+            in_amount as f64 / 10.0_f64.powf(token_b_decimals)
+        );
+        let quote_in = in_amount as f64 / 10.0_f64.powf(token_b_decimals);
+        let quote = jupiter_rarefish
+            .quote(&QuoteParams {
+                input_mint: jupiter_rarefish.pool.token_b_mint,
+                output_mint: jupiter_rarefish.pool.token_a_mint,
+                amount: out_amount,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .unwrap();
+
+        let Quote { out_amount, .. } = quote;
+
+        let quote_out = out_amount as f64 / 10.0_f64.powf(token_a_decimals);
+        println!(
+            "Quote result: {:?} ({})",
+            out_amount as f64 / 10.0_f64.powf(token_a_decimals),
+            quote_in / quote_out
+        );
+    }
+
+    #[test]
+    fn test_jupiter_rarefish_integration_quote_usdh_hbb() {
+        const USDH_HBB_MARKET: Pubkey = pubkey!("EHX2ozvoD4Vd4GajNrY9rXkP5TZmNgcmrw9cs43gKrW3");
+        let token_a_decimals = 6.0;
+        let token_b_decimals = 6.0;
+
+        let rpc = RpcClient::new("https://api.mainnet-beta.solana.com/");
+        let account = rpc.get_account(&USDH_HBB_MARKET).unwrap();
+
+        let market_account = KeyedAccount {
+            key: USDH_HBB_MARKET,
+            account,
+            params: None,
+        };
+
+        let mut jupiter_rarefish =
+            JupiterRarefish::new_from_keyed_account(&market_account).unwrap();
+        let accounts_to_update = jupiter_rarefish.get_accounts_to_update();
+
+        let accounts_map = rpc
+            .get_multiple_accounts(&accounts_to_update)
+            .unwrap()
+            .iter()
+            .enumerate()
+            .fold(HashMap::new(), |mut m, (index, account)| {
+                if let Some(account) = account {
+                    m.insert(accounts_to_update[index], account.clone());
+                }
+                m
+            });
+        jupiter_rarefish.update(&accounts_map).unwrap();
+        let in_amount = 1_000_000;
+        println!(
+            "Getting quote for selling {} USDH",
+            in_amount as f64 / 10.0_f64.powf(token_a_decimals)
+        );
+        let quote_in = in_amount as f64 / 10.0_f64.powf(token_a_decimals);
+        let quote = jupiter_rarefish
+            .quote(&QuoteParams {
+                input_mint: jupiter_rarefish.pool.token_a_mint,
+                output_mint: jupiter_rarefish.pool.token_b_mint,
+                amount: in_amount,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .unwrap();
+
+        let Quote { out_amount, .. } = quote;
+
+        let quote_out = out_amount as f64 / 10.0_f64.powf(token_b_decimals);
+        println!("Quote result: {:?} ({})", quote_out, quote_out / quote_in);
+
+        let in_amount = out_amount;
+
+        println!(
+            "Getting quote for buying USDH with {} HBB",
             in_amount as f64 / 10.0_f64.powf(token_b_decimals)
         );
         let quote_in = in_amount as f64 / 10.0_f64.powf(token_b_decimals);
