@@ -16,9 +16,9 @@ anyhow = "1.0"
 serde_json = "1.0.82"
 serde = "1.0.140"
 rust_decimal = "1.26.1"
-hyperplane = { git = "ssh://git@github.com/hubbleprotocol/rarefish.git", features = [
-    "no-entrypoint",
-    "production",
-]}
 jupiter-core = { git = "https://github.com/jup-ag/rust-amm-implementation.git" }
 jupiter = { git = "https://github.com/jup-ag/rust-amm-implementation.git" }
+hyperplane = { git = "https://github.com/hubbleprotocol/rarefish.git", features = [
+    "no-entrypoint",
+    "production",
+], rev = "3abbfe1" }

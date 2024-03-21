@@ -2278,7 +2278,7 @@ dependencies = [
 [[package]]
 name = "hyperplane"
 version = "1.0.0"
-source = "git+ssh://git@github.com/hubbleprotocol/rarefish.git#3abbfe1d265a2fb50a655805d16dc38565630a07"
+source = "git+https://github.com/hubbleprotocol/rarefish.git?rev=3abbfe1#3abbfe1d265a2fb50a655805d16dc38565630a07"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
