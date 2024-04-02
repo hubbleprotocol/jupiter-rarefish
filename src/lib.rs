@@ -1,5 +1,9 @@
 use anchor_lang::prelude::AccountInfo;
 use anchor_lang::AccountDeserialize;
+use anchor_spl::token_interface::spl_token_2022::extension::transfer_fee::TransferFeeConfig;
+use anchor_spl::token_interface::spl_token_2022::extension::{
+    BaseStateWithExtensions, StateWithExtensions,
+};
 use anyhow::Result;
 use hyperplane::curve::base::SwapCurve;
 use hyperplane::curve::calculator::TradeDirection;
@@ -7,10 +11,13 @@ use hyperplane::state::{SwapPool, SwapState};
 use hyperplane::utils::seeds::SWAP_CURVE;
 
 use jupiter_core::amm::{AccountMap, Amm, KeyedAccount, Swap};
+use solana_sdk::pubkey;
 use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
 
 use anchor_spl::token::TokenAccount;
 use jupiter_core::amm::{Quote, QuoteParams, SwapAndAccountMetas, SwapParams};
+
+pub const CLOCK_PUBLIC_KEY: Pubkey = pubkey!("SysvarC1ock11111111111111111111111111111111");
 
 #[derive(Clone, Debug)]
 pub struct JupiterRarefish {
@@ -18,7 +25,10 @@ pub struct JupiterRarefish {
     pool: SwapPool,
     token_a_vault: Option<TokenAccount>,
     token_b_vault: Option<TokenAccount>,
+    token_a_mint_raw: Option<solana_sdk::account::Account>,
+    token_b_mint_raw: Option<solana_sdk::account::Account>,
     curve: Option<SwapCurve>,
+    last_epoch: u64,
     /// Will always be "Rarefish"
     label: String,
     /// The pubkey of the Rarefish program
@@ -36,7 +46,10 @@ impl JupiterRarefish {
             pool,
             token_a_vault: None,
             token_b_vault: None,
+            token_a_mint_raw: None,
+            token_b_mint_raw: None,
             curve: None,
+            last_epoch: 0,
         })
     }
 
@@ -71,12 +84,27 @@ impl Amm for JupiterRarefish {
             self.pool.token_a_vault,
             self.pool.token_b_vault,
             self.pool_curve(),
+            CLOCK_PUBLIC_KEY,
+            // These 2 accounts are only needed at the start
+            self.pool.token_a_mint,
+            self.pool.token_b_mint,
         ]
     }
 
     fn update(&mut self, accounts_map: &AccountMap) -> Result<()> {
         let curve_key = self.pool_curve();
         let mut curve_account = accounts_map.get(&curve_key).unwrap().clone();
+
+        self.token_a_mint_raw = accounts_map
+            .get(&self.pool.token_a_mint)
+            .map(|account| account.clone());
+        self.token_b_mint_raw = accounts_map
+            .get(&self.pool.token_b_mint)
+            .map(|account| account.clone());
+        self.last_epoch = accounts_map
+            .get(&CLOCK_PUBLIC_KEY)
+            .map(|account| u64::from_le_bytes(account.data[16..24].try_into().unwrap()))
+            .unwrap_or(0);
 
         self.token_a_vault = accounts_map.get(&self.pool.token_a_vault).map(|account| {
             let mut data = &account.data[..TokenAccount::LEN];
@@ -101,14 +129,29 @@ impl Amm for JupiterRarefish {
     }
 
     fn quote(&self, quote_params: &QuoteParams) -> Result<Quote> {
-        let actual_amount_in = quote_params.amount;
-        // TODO: add support for token2022 transfer fee - these kind of tokens are blocked in rarefish
-        // let actual_amount_in = hyperplane::utils::sub_input_transfer_fees(
-        //     &ctx.accounts.source_mint.to_account_info(),
-        //     &pool.fees,
-        //     amount_in,
-        //     ctx.accounts.source_token_host_fees_account.is_some(),
-        // )?;
+        let a_to_b = quote_params.input_mint == self.pool.token_a_mint;
+        let source_mint_raw = if a_to_b {
+            self.token_a_mint_raw.as_ref().unwrap()
+        } else {
+            self.token_b_mint_raw.as_ref().unwrap()
+        };
+        let source_mint =
+            StateWithExtensions::<anchor_spl::token_2022::spl_token_2022::state::Mint>::unpack(
+                &source_mint_raw.data,
+            )?;
+        // Handle the case when the source token has a transfer fee
+        let actual_amount_in =
+            if let Ok(transfer_fee_config) = source_mint.get_extension::<TransferFeeConfig>() {
+                hyperplane::swap::utils::sub_input_transfer_fees_with_config(
+                    &transfer_fee_config,
+                    &self.pool.fees,
+                    quote_params.amount,
+                    false, // You should pass true here if your frontend takes a fee
+                    self.last_epoch,
+                )?
+            } else {
+                quote_params.amount
+            };
 
         let (token_a_amount, token_b_amount) = match (&self.token_a_vault, &self.token_b_vault) {
             (Some(token_a_vault), Some(token_b_vault)) => {
@@ -116,12 +159,11 @@ impl Amm for JupiterRarefish {
             }
             _ => panic!("These token accounts should be updated first"),
         };
-        let (trade_direction, source_amount, destination_amount) =
-            if quote_params.input_mint == self.pool.token_a_mint {
-                (TradeDirection::AtoB, token_a_amount, token_b_amount)
-            } else {
-                (TradeDirection::BtoA, token_b_amount, token_a_amount)
-            };
+        let (trade_direction, source_amount, destination_amount) = if a_to_b {
+            (TradeDirection::AtoB, token_a_amount, token_b_amount)
+        } else {
+            (TradeDirection::BtoA, token_b_amount, token_a_amount)
+        };
         let result = self.curve.as_ref().map(|curve| {
             curve.swap(
                 u128::from(actual_amount_in),
@@ -132,10 +174,33 @@ impl Amm for JupiterRarefish {
             )
         });
         match result {
-            Some(Ok(result)) => Ok(Quote {
-                out_amount: result.destination_amount_swapped as u64,
-                ..Quote::default()
-            }),
+            Some(Ok(result)) => {
+                // Handle the case when destination token has a transfer fee
+                let destination_mint_raw = if a_to_b {
+                    self.token_b_mint_raw.as_ref().unwrap()
+                } else {
+                    self.token_a_mint_raw.as_ref().unwrap()
+                };
+                let destination_mint = StateWithExtensions::<
+                    anchor_spl::token_2022::spl_token_2022::state::Mint,
+                >::unpack(&destination_mint_raw.data)?;
+                let transfer_fee = if let Ok(transfer_fee_config) =
+                    destination_mint.get_extension::<TransferFeeConfig>()
+                {
+                    transfer_fee_config
+                        .calculate_epoch_fee(
+                            self.last_epoch,
+                            result.destination_amount_swapped as u64,
+                        )
+                        .unwrap()
+                } else {
+                    0
+                };
+                Ok(Quote {
+                    out_amount: result.destination_amount_swapped as u64 - transfer_fee,
+                    ..Quote::default()
+                })
+            }
             _ => panic!("Curve account should be updated first"),
         }
     }
@@ -192,7 +257,7 @@ impl Amm for JupiterRarefish {
             AccountMeta::new(source_fees_vault, false),
             AccountMeta::new(*source_token_account, false),
             AccountMeta::new(*destination_token_account, false),
-            AccountMeta::new(self.program_id, false), // This is the source_token_host_fees_account, passing the program_id means None
+            AccountMeta::new(self.program_id, false), // This is the source_token_host_fees_account, passing the program_id means None. You should pass your account here if your frontend takes a fee
             AccountMeta::new_readonly(source_token_program, false),
             AccountMeta::new_readonly(destination_token_program, false),
         ];
@@ -279,6 +344,82 @@ mod tests {
 
         println!(
             "Getting quote for buying SOL with {} USDC",
+            in_amount as f64 / 10.0_f64.powf(token_b_decimals)
+        );
+        let quote_in = in_amount as f64 / 10.0_f64.powf(token_b_decimals);
+        let quote = jupiter_rarefish
+            .quote(&QuoteParams {
+                input_mint: jupiter_rarefish.pool.token_b_mint,
+                output_mint: jupiter_rarefish.pool.token_a_mint,
+                amount: out_amount,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .unwrap();
+
+        let Quote { out_amount, .. } = quote;
+
+        let quote_out = out_amount as f64 / 10.0_f64.powf(token_a_decimals);
+        println!(
+            "Quote result: {:?} ({})",
+            out_amount as f64 / 10.0_f64.powf(token_a_decimals),
+            quote_in / quote_out
+        );
+    }
+
+    #[test]
+    fn test_jupiter_rarefish_integration_quote_bern_sol() {
+        const BERN_SOL_MARKET: Pubkey = pubkey!("4xepyJRLRhMJSrxYHEa1NnujMspUN2hQpcegn2WsoNpZ");
+        let token_a_decimals = 5.0;
+        let token_b_decimals = 9.0;
+
+        let rpc = RpcClient::new("https://api.mainnet-beta.solana.com/");
+        let account = rpc.get_account(&BERN_SOL_MARKET).unwrap();
+
+        let market_account = KeyedAccount {
+            key: BERN_SOL_MARKET,
+            account,
+            params: None,
+        };
+
+        let mut jupiter_rarefish =
+            JupiterRarefish::new_from_keyed_account(&market_account).unwrap();
+        let accounts_to_update = jupiter_rarefish.get_accounts_to_update();
+
+        let accounts_map = rpc
+            .get_multiple_accounts(&accounts_to_update)
+            .unwrap()
+            .iter()
+            .enumerate()
+            .fold(HashMap::new(), |mut m, (index, account)| {
+                if let Some(account) = account {
+                    m.insert(accounts_to_update[index], account.clone());
+                }
+                m
+            });
+        jupiter_rarefish.update(&accounts_map).unwrap();
+        let in_amount = 1_000_000; // 10 BERN
+        println!(
+            "Getting quote for selling {} BERN",
+            in_amount as f64 / 10.0_f64.powf(token_a_decimals)
+        );
+        let quote_in = in_amount as f64 / 10.0_f64.powf(token_a_decimals);
+        let quote = jupiter_rarefish
+            .quote(&QuoteParams {
+                input_mint: jupiter_rarefish.pool.token_a_mint,
+                output_mint: jupiter_rarefish.pool.token_b_mint,
+                amount: in_amount,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .unwrap();
+
+        let Quote { out_amount, .. } = quote;
+        let quote_out = out_amount as f64 / 10.0_f64.powf(token_b_decimals);
+        println!("Quote result: {:?} ({})", quote_out, quote_out / quote_in);
+
+        let in_amount = out_amount;
+
+        println!(
+            "Getting quote for buying BERN with {} SOL",
             in_amount as f64 / 10.0_f64.powf(token_b_decimals)
         );
         let quote_in = in_amount as f64 / 10.0_f64.powf(token_b_decimals);

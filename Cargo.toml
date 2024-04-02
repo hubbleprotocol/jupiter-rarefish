@@ -21,4 +21,4 @@ jupiter = { git = "https://github.com/jup-ag/rust-amm-implementation.git" }
 hyperplane = { git = "https://github.com/hubbleprotocol/rarefish.git", features = [
     "no-entrypoint",
     "production",
-], rev = "3abbfe1" }
+]}
