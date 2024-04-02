@@ -413,9 +413,6 @@ mod tests {
             .unwrap();
 
         let Quote { out_amount, .. } = quote;
-        //token_out_amount=176594
-        // 0.000176594
-
         let quote_out = out_amount as f64 / 10.0_f64.powf(token_b_decimals);
         println!("Quote result: {:?} ({})", quote_out, quote_out / quote_in);
 
