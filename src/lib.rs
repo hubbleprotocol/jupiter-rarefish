@@ -1,10 +1,8 @@
-use anchor_lang::prelude::AccountInfo;
 use anchor_lang::AccountDeserialize;
 use anyhow::Result;
 use hyperplane::curve::base::SwapCurve;
 use hyperplane::curve::calculator::TradeDirection;
 use hyperplane::state::{SwapPool, SwapState};
-use hyperplane::utils::seeds::SWAP_CURVE;
 
 use jupiter_core::amm::{AccountMap, Amm, KeyedAccount, Swap};
 use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
@@ -39,10 +37,6 @@ impl JupiterRarefish {
             curve: None,
         })
     }
-
-    pub fn pool_curve(&self) -> Pubkey {
-        Pubkey::find_program_address(&[SWAP_CURVE, self.market_key.as_ref()], &self.program_id).0
-    }
 }
 
 impl Amm for JupiterRarefish {
@@ -70,14 +64,10 @@ impl Amm for JupiterRarefish {
         vec![
             self.pool.token_a_vault,
             self.pool.token_b_vault,
-            self.pool_curve(),
         ]
     }
 
     fn update(&mut self, accounts_map: &AccountMap) -> Result<()> {
-        let curve_key = self.pool_curve();
-        let mut curve_account = accounts_map.get(&curve_key).unwrap().clone();
-
         self.token_a_vault = accounts_map.get(&self.pool.token_a_vault).map(|account| {
             let mut data = &account.data[..TokenAccount::LEN];
             TokenAccount::try_deserialize(&mut data).unwrap()
@@ -86,17 +76,7 @@ impl Amm for JupiterRarefish {
             let mut data = &account.data[..TokenAccount::LEN];
             TokenAccount::try_deserialize(&mut data).unwrap()
         });
-        let curve_account_info = AccountInfo::new(
-            &curve_key,
-            false,
-            false,
-            &mut curve_account.lamports,
-            &mut curve_account.data,
-            &curve_account.owner,
-            curve_account.executable,
-            curve_account.rent_epoch,
-        );
-        self.curve = Some(hyperplane::curve!(curve_account_info, self.pool));
+        self.curve = Some(hyperplane::curve!(self.pool.swap_curve_data, self.pool));
         Ok(())
     }
 
@@ -183,7 +163,6 @@ impl Amm for JupiterRarefish {
         let account_metas = vec![
             AccountMeta::new(*token_transfer_authority, true),
             AccountMeta::new(self.market_key, false),
-            AccountMeta::new_readonly(self.pool_curve(), false),
             AccountMeta::new_readonly(self.pool.pool_authority, false),
             AccountMeta::new_readonly(*source_mint, false),
             AccountMeta::new_readonly(*destination_mint, false),
@@ -226,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_jupiter_rarefish_integration_quote_sol_usdc() {
-        const SOL_USDC_MARKET: Pubkey = pubkey!("H6jDD8QN6McX2QXMeVw6zBs3HKEgVvtnhsH139heFAnF");
+        const SOL_USDC_MARKET: Pubkey = pubkey!("3uqKSr5gZzZSJXgrdikPeWGp1SnEqEayFABwzDQ3vRWe");
         let token_a_decimals = 9.0;
         let token_b_decimals = 6.0;
 
@@ -303,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_jupiter_rarefish_integration_quote_usdh_hbb() {
-        const USDH_HBB_MARKET: Pubkey = pubkey!("EHX2ozvoD4Vd4GajNrY9rXkP5TZmNgcmrw9cs43gKrW3");
+        const USDH_HBB_MARKET: Pubkey = pubkey!("HcCyVwmtcYKLQYCgfQPv8LVRxW3XDkbop4WZRShGCvK4");
         let token_a_decimals = 6.0;
         let token_b_decimals = 6.0;
 
@@ -380,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_jupiter_rarefish_integration_sim() {
-        const SOL_USDC_MARKET: Pubkey = pubkey!("H6jDD8QN6McX2QXMeVw6zBs3HKEgVvtnhsH139heFAnF");
+        const SOL_USDC_MARKET: Pubkey = pubkey!("HcCyVwmtcYKLQYCgfQPv8LVRxW3XDkbop4WZRShGCvK4");
         let rpc = RpcClient::new("https://api.mainnet-beta.solana.com/");
         let account = rpc.get_account(&SOL_USDC_MARKET).unwrap();
 
