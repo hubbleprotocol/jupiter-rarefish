@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_jupiter_rarefish_integration_sim() {
-        const SOL_USDC_MARKET: Pubkey = pubkey!("HcCyVwmtcYKLQYCgfQPv8LVRxW3XDkbop4WZRShGCvK4");
+        const SOL_USDC_MARKET: Pubkey = pubkey!("3uqKSr5gZzZSJXgrdikPeWGp1SnEqEayFABwzDQ3vRWe");
         let rpc = RpcClient::new("https://api.mainnet-beta.solana.com/");
         let account = rpc.get_account(&SOL_USDC_MARKET).unwrap();
 
