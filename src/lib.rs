@@ -161,7 +161,7 @@ impl Amm for JupiterRarefish {
         }
 
         let account_metas = vec![
-            AccountMeta::new(*token_transfer_authority, true),
+            AccountMeta::new_readonly(*token_transfer_authority, true),
             AccountMeta::new(self.market_key, false),
             AccountMeta::new_readonly(self.pool.pool_authority, false),
             AccountMeta::new_readonly(*source_mint, false),

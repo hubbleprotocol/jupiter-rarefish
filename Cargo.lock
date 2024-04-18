@@ -801,7 +801,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4114279215a005bc675e386011e594e1d9b800918cea18fcadadcce864a2046b"
 dependencies = [
  "borsh-derive 0.10.3",
- "hashbrown 0.13.2",
+ "hashbrown 0.12.3",
 ]
 
 [[package]]
@@ -2278,7 +2278,7 @@ dependencies = [
 [[package]]
 name = "hyperplane"
 version = "1.0.0"
-source = "git+https://github.com/hubbleprotocol/rarefish.git?rev=50ea5f482afca47571eb684697b22eabe30fe173#50ea5f482afca47571eb684697b22eabe30fe173"
+source = "git+https://github.com/hubbleprotocol/rarefish.git?rev=7640e38#7640e38c5c4b21532eb5141f57e6095ec7dc1724"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
